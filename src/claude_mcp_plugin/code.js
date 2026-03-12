@@ -160,6 +160,8 @@ async function handleCommand(command, params) {
     // Nuevos comandos para propiedades de texto
     case "set_font_name":
       return await setFontName(params);
+    case "set_range_font_name":
+      return await setRangeFontName(params);
     case "set_font_size":
       return await setFontSize(params);
     case "set_font_weight":
@@ -290,10 +292,231 @@ async function handleCommand(command, params) {
       return await createConnector(params);
     case "create_section":
       return await createSection(params);
+    case "batch_execute":
+      return await batchExecute(params);
+    case "execute_plugin_code":
+      return await executePluginCode(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
 };
+
+// ── Batch Execute ─────────────────────────────────────────────────────
+// Executes multiple commands in a single round-trip.
+// Supports $N.field references to pipe results between commands.
+async function batchExecute(params) {
+  const { commands } = params;
+  if (!commands || !Array.isArray(commands)) {
+    throw new Error("batch_execute requires a 'commands' array");
+  }
+
+  const results = [];
+  const errors = [];
+
+  for (let i = 0; i < commands.length; i++) {
+    const entry = commands[i];
+    let { cmd, params: cmdParams } = entry;
+
+    // Deep-clone params to avoid mutation
+    cmdParams = JSON.parse(JSON.stringify(cmdParams || {}));
+
+    // Resolve $N.field references from previous results
+    resolveRefs(cmdParams, results);
+
+    try {
+      const result = await handleCommand(cmd, cmdParams);
+      results.push(result);
+      errors.push(null);
+    } catch (err) {
+      const errorMsg = err.message || String(err);
+      results.push(null);
+      errors.push({ index: i, cmd: cmd, error: errorMsg });
+      // Continue executing remaining commands (best-effort)
+    }
+  }
+
+  return { results, errors: errors.filter(Boolean), totalExecuted: commands.length };
+}
+
+// ── Execute Plugin Code ────────────────────────────────────────────────
+// Persistent state (survives across execute_plugin_code calls)
+var _execStorage = {};
+var _execLoadedFonts = {};
+
+// F helpers — built lazily on first call to avoid sandbox init issues
+var _execF = null;
+function getExecHelpers() {
+  if (_execF) return _execF;
+  _execF = {
+    color: function(hex) {
+      var h = hex.replace("#", "");
+      if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+      return {
+        r: parseInt(h.slice(0, 2), 16) / 255,
+        g: parseInt(h.slice(2, 4), 16) / 255,
+        b: parseInt(h.slice(4, 6), 16) / 255
+      };
+    },
+    loadFont: async function(family, style) {
+      var key = family + "::" + style;
+      if (!_execLoadedFonts[key]) {
+        await figma.loadFontAsync({ family: family, style: style });
+        _execLoadedFonts[key] = true;
+      }
+    },
+    screen: async function(name) {
+      var f = figma.createFrame();
+      f.name = name || "Screen";
+      f.resize(393, 852);
+      f.x = 0; f.y = 0;
+      f.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+      figma.currentPage.appendChild(f);
+      return { id: f.id, name: f.name, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    frame: async function(name, w, h, opts) {
+      opts = opts || {};
+      var f = figma.createFrame();
+      f.name = name || "Frame";
+      f.resize(w || 100, h || 100);
+      f.x = opts.x || 0; f.y = opts.y || 0;
+      if (opts.fillColor) f.fills = [{ type: "SOLID", color: _execF.color(opts.fillColor) }];
+      var p = opts.parentId ? await figma.getNodeByIdAsync(opts.parentId) : figma.currentPage;
+      if (p && typeof p.appendChild === "function") p.appendChild(f);
+      return { id: f.id, name: f.name, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    text: async function(content, opts) {
+      opts = opts || {};
+      var family = opts.fontFamily || "Roboto";
+      var style = opts.fontStyle || "Regular";
+      await _execF.loadFont(family, style);
+      var t = figma.createText();
+      t.fontName = { family: family, style: style };
+      t.fontSize = opts.fontSize || 14;
+      t.x = opts.x || 0; t.y = opts.y || 0;
+      t.fills = [{ type: "SOLID", color: _execF.color(opts.color || "#000000") }];
+      if (opts.lineHeight !== undefined) {
+        t.lineHeight = typeof opts.lineHeight === "number"
+          ? { value: opts.lineHeight, unit: "PIXELS" } : opts.lineHeight;
+      }
+      if (opts.textAlignHorizontal) t.textAlignHorizontal = opts.textAlignHorizontal;
+      t.characters = content || "";
+      if (opts.width && opts.width > 0) { t.textAutoResize = "HEIGHT"; t.resize(opts.width, t.height); }
+      var p = opts.parentId ? await figma.getNodeByIdAsync(opts.parentId) : figma.currentPage;
+      if (p && typeof p.appendChild === "function") p.appendChild(t);
+      return { id: t.id, name: t.name, x: t.x, y: t.y, width: t.width, height: t.height };
+    },
+    rect: async function(name, w, h, opts) {
+      opts = opts || {};
+      var r = figma.createRectangle();
+      r.name = name || "Rectangle";
+      r.resize(w || 100, h || 100);
+      r.x = opts.x || 0; r.y = opts.y || 0;
+      if (opts.fillColor) r.fills = [{ type: "SOLID", color: _execF.color(opts.fillColor) }];
+      var p = opts.parentId ? await figma.getNodeByIdAsync(opts.parentId) : figma.currentPage;
+      if (p && typeof p.appendChild === "function") p.appendChild(r);
+      return { id: r.id, name: r.name, x: r.x, y: r.y, width: r.width, height: r.height };
+    },
+    find: function(predicate, root) {
+      return (root || figma.currentPage).findAll(predicate);
+    },
+    findByName: function(name, root) {
+      return (root || figma.currentPage).findOne(function(n) { return n.name === name; });
+    },
+    findById: async function(id) {
+      return figma.getNodeByIdAsync(id);
+    },
+    recolor: function(oldHex, newHex, root) {
+      var oldC = _execF.color(oldHex);
+      var newC = _execF.color(newHex);
+      var eps = 1 / 512;
+      var nodes = (root || figma.currentPage).findAll(function() { return true; });
+      var changed = 0;
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        var mod = false;
+        if (n.fills && Array.isArray(n.fills)) {
+          var nf = n.fills.map(function(fl) {
+            if (fl.type === "SOLID" && Math.abs(fl.color.r - oldC.r) < eps && Math.abs(fl.color.g - oldC.g) < eps && Math.abs(fl.color.b - oldC.b) < eps) {
+              mod = true;
+              return Object.assign({}, fl, { color: newC });
+            }
+            return fl;
+          });
+          if (mod) n.fills = nf;
+        }
+        if (n.strokes && Array.isArray(n.strokes)) {
+          var sm = false;
+          var ns = n.strokes.map(function(st) {
+            if (st.type === "SOLID" && Math.abs(st.color.r - oldC.r) < eps && Math.abs(st.color.g - oldC.g) < eps && Math.abs(st.color.b - oldC.b) < eps) {
+              sm = true;
+              return Object.assign({}, st, { color: newC });
+            }
+            return st;
+          });
+          if (sm) { n.strokes = ns; mod = true; }
+        }
+        if (mod) changed++;
+      }
+      return changed;
+    }
+  };
+  return _execF;
+}
+
+async function executePluginCode(params) {
+  var code = params && params.code;
+  if (typeof code !== "string" || code.trim() === "") {
+    throw new Error("execute_plugin_code requires a non-empty 'code' string");
+  }
+
+  var helpers = getExecHelpers();
+  var AsyncFn = Object.getPrototypeOf(async function() {}).constructor;
+
+  var fn;
+  try {
+    fn = new AsyncFn("figma", "F", "storage", code);
+  } catch (e) {
+    return { success: false, error: "Syntax error: " + e.message };
+  }
+
+  var timeout = new Promise(function(_, reject) {
+    setTimeout(function() { reject(new Error("execute_plugin_code timed out after 30s")); }, 30000);
+  });
+
+  try {
+    var result = await Promise.race([fn(figma, helpers, _execStorage), timeout]);
+    var serialized;
+    try { serialized = JSON.parse(JSON.stringify(result !== undefined && result !== null ? result : null)); }
+    catch (e) { serialized = String(result); }
+    return { success: true, result: serialized };
+  } catch (e) {
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
+// Recursively resolve $N / $N.field references in params object
+function resolveRefs(obj, results) {
+  if (obj === null || obj === undefined) return;
+  if (typeof obj !== 'object') return;
+
+  const keys = Array.isArray(obj) ? obj.map((_, i) => i) : Object.keys(obj);
+  for (const key of keys) {
+    const val = obj[key];
+    if (typeof val === 'string') {
+      // Match patterns like $0, $0.id, $1.name etc.
+      const refMatch = val.match(/^\$(\d+)(\.(\w+))?$/);
+      if (refMatch) {
+        const refIdx = parseInt(refMatch[1], 10);
+        const refField = refMatch[3];
+        if (refIdx < results.length && results[refIdx] !== null) {
+          obj[key] = refField ? results[refIdx][refField] : results[refIdx];
+        }
+      }
+    } else if (typeof val === 'object') {
+      resolveRefs(val, results);
+    }
+  }
+}
 
 // Command implementations
 
@@ -2412,6 +2635,41 @@ async function setFontName(params) {
     };
   } catch (error) {
     throw new Error(`Error setting font name: ${error.message}`);
+  }
+}
+
+async function setRangeFontName(params) {
+  const { nodeId, ranges } = params || {};
+  if (!nodeId || !ranges || !Array.isArray(ranges)) {
+    throw new Error("Missing nodeId or ranges array");
+  }
+
+  const node = await getNodeByIdSafe(nodeId);
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  if (node.type !== "TEXT") {
+    throw new Error(`Node is not a text node: ${nodeId}`);
+  }
+
+  try {
+    const results = [];
+    for (const range of ranges) {
+      const { start, end, family, style } = range;
+      const fontName = { family, style: style || "Regular" };
+      await figma.loadFontAsync(fontName);
+      node.setRangeFontName(start, end, fontName);
+      results.push({ start, end, family, style: style || "Regular" });
+    }
+    return {
+      id: node.id,
+      name: node.name,
+      totalCharacters: node.characters.length,
+      rangesApplied: results
+    };
+  } catch (error) {
+    throw new Error(`Error setting range font name: ${error.message}`);
   }
 }
 

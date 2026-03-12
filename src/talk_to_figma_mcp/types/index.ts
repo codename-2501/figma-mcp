@@ -70,6 +70,7 @@ export type FigmaCommand =
   | "set_multiple_text_contents"
   | "set_auto_layout"
   | "set_font_name"
+  | "set_range_font_name"
   | "set_font_size"
   | "set_font_weight"
   | "set_letter_spacing"
@@ -128,4 +129,6 @@ export type FigmaCommand =
   | "set_sticky_text"
   | "create_shape_with_text"
   | "create_connector"
-  | "create_section";
+  | "create_section"
+  | "batch_execute"
+  | "execute_plugin_code";

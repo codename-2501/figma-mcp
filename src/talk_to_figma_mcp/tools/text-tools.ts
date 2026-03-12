@@ -190,6 +190,53 @@ export function registerTextTools(server: McpServer): void {
     }
   );
 
+  // Set Range Font Name Tool
+  server.tool(
+    "set_range_font_name",
+    "Set font name/style for specific character ranges in a text node. Useful for mixing Bold and Regular within the same text node.",
+    {
+      nodeId: z.string().describe("The ID of the text node to modify"),
+      ranges: z.array(
+        z.object({
+          start: z.number().int().min(0).describe("Start character index (inclusive)"),
+          end: z.number().int().min(1).describe("End character index (exclusive)"),
+          family: z.string().describe("Font family name"),
+          style: z.string().optional().describe("Font style (e.g., 'Regular', 'Bold')"),
+        })
+      ).describe("Array of character ranges with font settings"),
+    },
+    async ({ nodeId, ranges }) => {
+      try {
+        const result = await sendCommandToFigma("set_range_font_name", {
+          nodeId,
+          ranges,
+        });
+        const typedResult = result as {
+          name: string;
+          totalCharacters: number;
+          rangesApplied: Array<{ start: number; end: number; family: string; style: string }>;
+        };
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Applied ${typedResult.rangesApplied.length} font ranges to "${typedResult.name}" (${typedResult.totalCharacters} chars total)`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error setting range font name: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+        };
+      }
+    }
+  );
+
   // Set Font Size Tool
   server.tool(
     "set_font_size",
