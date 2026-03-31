@@ -313,6 +313,22 @@ async function batchExecute(params) {
   const results = [];
   const errors = [];
 
+  // Pre-load all fonts referenced in this batch (parallel, cached)
+  const fontsToLoad = new Set();
+  for (const entry of commands) {
+    const p = entry.params || {};
+    if (entry.cmd === 'create_text' && p.fontFamily && typeof p.fontFamily === 'string') {
+      fontsToLoad.add(JSON.stringify({ family: p.fontFamily, style: p.fontStyle || 'Regular' }));
+    }
+  }
+  if (fontsToLoad.size > 0) {
+    await Promise.all(
+      Array.from(fontsToLoad).map(function(f) {
+        return figma.loadFontAsync(JSON.parse(f)).catch(function() {});
+      })
+    );
+  }
+
   for (let i = 0; i < commands.length; i++) {
     const entry = commands[i];
     let { cmd, params: cmdParams } = entry;
@@ -425,6 +441,357 @@ function getExecHelpers() {
     findById: async function(id) {
       return figma.getNodeByIdAsync(id);
     },
+    // ── UI Component Helpers ─────────────────────────────────────────────
+    statusBar: async function(parentId, opts) {
+      opts = opts || {};
+      var f = figma.createFrame();
+      f.name = "Status Bar";
+      f.resize(393, 44);
+      f.x = 0; f.y = 0;
+      f.fills = [{ type: "SOLID", color: _execF.color("#F6F6F6") }];
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Medium");
+      var t = figma.createText();
+      t.fontName = { family: "Roboto", style: "Medium" };
+      t.fontSize = 15;
+      t.characters = opts.time || "9:41";
+      t.fills = [{ type: "SOLID", color: _execF.color("#212121") }];
+      t.x = 16; t.y = 13;
+      f.appendChild(t);
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    inputField: async function(label, placeholder, parentId, opts) {
+      opts = opts || {};
+      var f = figma.createFrame();
+      f.name = label + " 입력 필드";
+      f.resize(opts.width || 361, 56);
+      f.x = opts.x !== undefined ? opts.x : 16;
+      f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: _execF.color("#FFFFFF") }];
+      f.strokes = [{ type: "SOLID", color: _execF.color(opts.error ? "#F44336" : "#E0E0E0") }];
+      f.strokeWeight = 1;
+      f.cornerRadius = 8;
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Regular");
+      var lbl = figma.createText();
+      lbl.fontName = { family: "Roboto", style: "Regular" };
+      lbl.fontSize = 12;
+      lbl.characters = label;
+      lbl.fills = [{ type: "SOLID", color: _execF.color("#757575") }];
+      lbl.x = 12; lbl.y = 9;
+      f.appendChild(lbl);
+      var ph = figma.createText();
+      ph.fontName = { family: "Roboto", style: "Regular" };
+      ph.fontSize = 15;
+      ph.characters = placeholder;
+      ph.fills = [{ type: "SOLID", color: _execF.color("#BDBDBD") }];
+      ph.x = 12; ph.y = 28;
+      f.appendChild(ph);
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    primaryButton: async function(label, parentId, opts) {
+      opts = opts || {};
+      var f = figma.createFrame();
+      f.name = opts.name || label;
+      f.resize(opts.width || 361, 52);
+      f.x = opts.x !== undefined ? opts.x : 16;
+      f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: _execF.color(opts.disabled ? "#E0E0E0" : "#2196F3") }];
+      f.cornerRadius = 12;
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Bold");
+      var t = figma.createText();
+      t.fontName = { family: "Roboto", style: "Bold" };
+      t.fontSize = 16;
+      t.characters = label;
+      t.fills = [{ type: "SOLID", color: _execF.color(opts.disabled ? "#BDBDBD" : "#FFFFFF") }];
+      t.textAlignHorizontal = "CENTER";
+      t.lineHeight = { value: 52, unit: "PIXELS" };
+      t.textAutoResize = "NONE";
+      t.resize(opts.width || 361, 52);
+      t.x = 0; t.y = 0;
+      f.appendChild(t);
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    outlineButton: async function(label, parentId, opts) {
+      opts = opts || {};
+      var f = figma.createFrame();
+      f.name = opts.name || label;
+      f.resize(opts.width || 361, 52);
+      f.x = opts.x !== undefined ? opts.x : 16;
+      f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: _execF.color(opts.bgColor || "#FFFFFF") }];
+      f.strokes = [{ type: "SOLID", color: _execF.color("#E0E0E0") }];
+      f.strokeWeight = 1;
+      f.cornerRadius = 12;
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Regular");
+      var t = figma.createText();
+      t.fontName = { family: "Roboto", style: "Regular" };
+      t.fontSize = 15;
+      t.characters = label;
+      t.fills = [{ type: "SOLID", color: _execF.color(opts.textColor || "#212121") }];
+      t.textAlignHorizontal = "CENTER";
+      t.lineHeight = { value: 52, unit: "PIXELS" };
+      t.textAutoResize = "NONE";
+      t.resize(opts.width || 361, 52);
+      t.x = 0; t.y = 0;
+      f.appendChild(t);
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    listItem: async function(text, parentId, opts) {
+      opts = opts || {};
+      var f = figma.createFrame();
+      f.name = opts.name || text;
+      f.resize(opts.width || 393, 56);
+      f.x = opts.x || 0; f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: _execF.color(opts.bgColor || "#FFFFFF") }];
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Regular");
+      var t = figma.createText();
+      t.fontName = { family: "Roboto", style: "Regular" };
+      t.fontSize = 15;
+      t.lineHeight = { value: 22, unit: "PIXELS" };
+      t.characters = text;
+      t.fills = [{ type: "SOLID", color: _execF.color("#212121") }];
+      t.x = 16; t.y = 17;
+      f.appendChild(t);
+      var div = figma.createRectangle();
+      div.name = "Divider";
+      div.resize(opts.width || 393, 1);
+      div.x = 0; div.y = 55;
+      div.fills = [{ type: "SOLID", color: _execF.color("#E0E0E0") }];
+      f.appendChild(div);
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    sectionHeader: async function(text, parentId, opts) {
+      opts = opts || {};
+      var f = figma.createFrame();
+      f.name = text;
+      f.resize(opts.width || 393, 32);
+      f.x = opts.x || 0; f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: _execF.color("#F5F5F5") }];
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Bold");
+      var t = figma.createText();
+      t.fontName = { family: "Roboto", style: "Bold" };
+      t.fontSize = 13;
+      t.lineHeight = { value: 18, unit: "PIXELS" };
+      t.characters = text;
+      t.fills = [{ type: "SOLID", color: _execF.color("#757575") }];
+      t.x = 16; t.y = 7;
+      f.appendChild(t);
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    tabBar: async function(tabs, parentId, opts) {
+      opts = opts || {};
+      var f = figma.createFrame();
+      f.name = "Tab Bar";
+      f.resize(393, 56);
+      f.x = 0; f.y = opts.y !== undefined ? opts.y : 796;
+      f.fills = [{ type: "SOLID", color: _execF.color("#FFFFFF") }];
+      f.strokes = [{ type: "SOLID", color: _execF.color("#E0E0E0") }];
+      f.strokeWeight = 1;
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Medium");
+      var tabW = Math.floor(393 / tabs.length);
+      for (var i = 0; i < tabs.length; i++) {
+        var isActive = opts.activeIndex === i;
+        var label = typeof tabs[i] === "string" ? tabs[i] : tabs[i].label;
+        var t = figma.createText();
+        t.fontName = { family: "Roboto", style: "Medium" };
+        t.fontSize = 10;
+        t.lineHeight = { value: 14, unit: "PIXELS" };
+        t.characters = label;
+        t.fills = [{ type: "SOLID", color: _execF.color(isActive ? "#2196F3" : "#757575") }];
+        t.textAlignHorizontal = "CENTER";
+        t.textAutoResize = "HEIGHT";
+        t.resize(tabW, 14);
+        t.x = i * tabW; t.y = 21;
+        f.appendChild(t);
+      }
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    badge: async function(number, parentId, opts) {
+      opts = opts || {};
+      await figma.loadFontAsync({ family: "Roboto", style: "Bold" });
+      var node;
+      // 1) Component 24 인스턴스 시도 (문서 내 로컬 우선)
+      try {
+        var allComps = figma.root.findAll(function(n) { return n.type === "COMPONENT" && n.name === "Component 24"; });
+        if (allComps.length > 0) {
+          node = allComps[0].createInstance();
+        } else {
+          var comp = await figma.importComponentByKeyAsync("d178a2485ff4307b1116ebee11695d75c0d3ccef");
+          node = comp.createInstance();
+        }
+        var textNode = node.findOne(function(n) { return n.type === "TEXT"; });
+        if (textNode) textNode.characters = String(number);
+      } catch(e) {
+        // 2) 컴포넌트 없을 때 직접 생성 (44×29 박제 스펙)
+        node = figma.createFrame();
+        node.name = "뱃지-" + number;
+        node.resize(44, 29);
+        node.cornerRadius = 15;
+        node.fills = [{ type: "SOLID", color: { r: 0.749, g: 0.059, b: 0.059 } }];
+        var t = figma.createText();
+        t.fontName = { family: "Roboto", style: "Bold" };
+        t.fontSize = 16;
+        t.characters = String(number);
+        t.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+        t.textAlignHorizontal = "CENTER";
+        t.resize(44, 29);
+        t.x = 0; t.y = 5;
+        node.appendChild(t);
+      }
+      node.x = opts.x || 0;
+      node.y = opts.y || 0;
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(node);
+      return { id: node.id, x: node.x, y: node.y, width: node.width, height: node.height };
+    },
+    // ── Description (Component 23) ────────────────────────────────────────
+    // F.description(screenName, meta, sections, opts)
+    //   meta:     { id, path, desc, devType }
+    //   sections: [{ title: '헤더 영역', descs: ['설명1', '설명2'] }]
+    //   opts:     { x, y }
+    // 박제 스펙: 585px 고정폭, Meta(흰색 4행×65px) + Header(#F2F2F2 59px) + Body(#F2F2F2 가변)
+    description: async function(screenName, meta, sections, opts) {
+      opts = opts || {};
+      await figma.loadFontAsync({ family: "Noto Sans", style: "Bold" });
+      await figma.loadFontAsync({ family: "Roboto", style: "Bold" });
+      await figma.loadFontAsync({ family: "Roboto", style: "Regular" });
+      var x = opts.x || 0, y = opts.y || 0;
+      var page = figma.currentPage;
+      var WHITE = { r:1,g:1,b:1 }, F2F2 = { r:0.949,g:0.949,b:0.949 };
+      var BLACK = { r:0,g:0,b:0 }, CYAN = { r:0,g:0.761,b:1 }, DARK = { r:0.129,g:0.129,b:0.129 };
+      var metaRowLabels = ["화면 ID","화면 경로","화면 설명","개발 유형"];
+      var metaValues = [meta.id, meta.path, meta.desc, meta.devType];
+
+      // ① Component 23 인스턴스 시도
+      try {
+        var c23list = figma.root.findAll(function(n){ return n.type==="COMPONENT" && n.name==="Component 23"; });
+        var comp23 = c23list.length > 0 ? c23list[0] : await figma.importComponentByKeyAsync("b9e26c4fab5622c341ea50cb66b1a7c513f0ebd2");
+        var inst = comp23.createInstance();
+        inst.name = "Description/" + screenName;
+        inst.x = x; inst.y = y;
+        page.appendChild(inst);
+
+        // 메타 값 업데이트: 각 행의 오른쪽 텍스트(x>100) 순서대로
+        var metaWrap = inst.findOne(function(n){ return n.children && n.children.length===4 && n.y===0; });
+        if (metaWrap) {
+          var rows = metaWrap.children;
+          for (var i=0; i<rows.length && i<metaValues.length; i++) {
+            var valT = rows[i].findOne(function(n){ return n.type==="TEXT" && n.x > 100; });
+            if (valT) { await figma.loadFontAsync(valT.fontName); valT.characters = metaValues[i]; }
+          }
+        }
+
+        // Body 텍스트 업데이트 (Component 22 - 단일 텍스트 노드, 혼합 스타일)
+        var bodyComp = inst.findOne(function(n){ return n.children && n.children.length===1 && n.children[0].type==="TEXT" && n.y > 300; });
+        if (bodyComp) {
+          var bt = bodyComp.children[0];
+          bt.fontName = { family:"Roboto", style:"Regular" };
+          // 전체 텍스트 빌드
+          var fullText = "", ranges = [];
+          for (var si=0; si<sections.length; si++) {
+            var sec = sections[si];
+            var tStr = (si+1) + ". " + sec.title + "\n";
+            var ts = fullText.length;
+            fullText += tStr;
+            ranges.push({ s:ts, e:fullText.length, bold:true });
+            var descs = Array.isArray(sec.descs) ? sec.descs : [sec.descs];
+            for (var di=0; di<descs.length; di++) {
+              var dStr = "ㆍ" + descs[di] + "\n";
+              var ds = fullText.length;
+              fullText += dStr;
+              ranges.push({ s:ds, e:fullText.length, bold:false });
+            }
+            if (si < sections.length-1) fullText += "\n";
+          }
+          bt.textAutoResize = "HEIGHT";
+          bt.resize(511, 50);
+          bt.characters = fullText;
+          for (var ri=0; ri<ranges.length; ri++) {
+            var rg = ranges[ri];
+            bt.setRangeFontName(rg.s, rg.e, { family:"Roboto", style: rg.bold ? "Bold" : "Regular" });
+          }
+          bodyComp.resize(585, bt.height + 84);
+          // 전체 인스턴스 높이 재조정
+          var totalH = 0;
+          for (var ci=0; ci<inst.children.length; ci++) {
+            var ch = inst.children[ci];
+            totalH = Math.max(totalH, ch.y + ch.height);
+          }
+          inst.resize(585, totalH);
+        }
+        return { id:inst.id, x:inst.x, y:inst.y, width:inst.width, height:inst.height };
+      } catch(e) { /* fallback */ }
+
+      // ② 폴백: 박제 스펙으로 직접 생성
+      var main = figma.createFrame();
+      main.name = "Description/" + screenName;
+      main.resize(585, 100); main.fills = [{ type:"SOLID", color:WHITE }];
+      main.clipsContent = false; main.x = x; main.y = y;
+      page.appendChild(main);
+
+      var mf = figma.createFrame();
+      mf.name = "Meta BG"; mf.resize(585, 280); mf.fills = [{ type:"SOLID", color:WHITE }];
+      mf.x = 0; mf.y = 0; main.appendChild(mf);
+      for (var i=0; i<4; i++) {
+        var lb = figma.createText();
+        lb.fontName = { family:"Noto Sans", style:"Bold" }; lb.fontSize = 26;
+        lb.characters = metaRowLabels[i]; lb.fills = [{ type:"SOLID", color:BLACK }];
+        lb.x = 15; lb.y = 15+i*65; mf.appendChild(lb);
+        var vt = figma.createText();
+        vt.fontName = { family:"Noto Sans", style:"Bold" }; vt.fontSize = 24;
+        vt.characters = metaValues[i]; vt.fills = [{ type:"SOLID", color:CYAN }];
+        vt.x = 167; vt.y = 17+i*65; mf.appendChild(vt);
+      }
+
+      var hf = figma.createFrame();
+      hf.name = "Desc Header BG"; hf.resize(585,59); hf.fills = [{ type:"SOLID", color:F2F2 }];
+      hf.x = 0; hf.y = 280; main.appendChild(hf);
+      var ht = figma.createText();
+      ht.fontName = { family:"Noto Sans", style:"Bold" }; ht.fontSize = 26;
+      ht.characters = "Description(화면설명)"; ht.fills = [{ type:"SOLID", color:BLACK }];
+      ht.textAlignHorizontal = "CENTER"; ht.resize(585,35); ht.x = 0; ht.y = 12;
+      hf.appendChild(ht);
+
+      var bf = figma.createFrame();
+      bf.name = "Desc Body BG"; bf.fills = [{ type:"SOLID", color:F2F2 }];
+      bf.x = 0; bf.y = 339; main.appendChild(bf);
+      var cy = 42;
+      for (var si=0; si<sections.length; si++) {
+        var sec = sections[si];
+        var tn = figma.createText();
+        tn.fontName = { family:"Roboto", style:"Bold" }; tn.fontSize = 24;
+        tn.characters = (si+1)+". "+sec.title; tn.fills = [{ type:"SOLID", color:DARK }];
+        tn.resize(511,35); tn.textAutoResize = "HEIGHT"; tn.x = 37; tn.y = cy;
+        bf.appendChild(tn); cy += 42;
+        var descs = Array.isArray(sec.descs) ? sec.descs : [sec.descs];
+        for (var di=0; di<descs.length; di++) {
+          var dn = figma.createText();
+          dn.fontName = { family:"Roboto", style:"Regular" }; dn.fontSize = 24;
+          dn.characters = "ㆍ"+descs[di]; dn.fills = [{ type:"SOLID", color:DARK }];
+          dn.resize(511,35); dn.textAutoResize = "HEIGHT"; dn.x = 37; dn.y = cy;
+          bf.appendChild(dn); cy += 38;
+        }
+        cy += 20;
+      }
+      cy += 42;
+      bf.resize(585, cy);
+      main.resize(585, 280+59+cy);
+      return { id:main.id, x:main.x, y:main.y, width:main.width, height:main.height };
+    },
+    // ── End UI Component Helpers ─────────────────────────────────────────
     recolor: function(oldHex, newHex, root) {
       var oldC = _execF.color(oldHex);
       var newC = _execF.color(newHex);
@@ -480,7 +847,7 @@ async function executePluginCode(params) {
   }
 
   var timeout = new Promise(function(_, reject) {
-    setTimeout(function() { reject(new Error("execute_plugin_code timed out after 30s")); }, 30000);
+    setTimeout(function() { reject(new Error("execute_plugin_code timed out after 120s")); }, 120000);
   });
 
   try {
