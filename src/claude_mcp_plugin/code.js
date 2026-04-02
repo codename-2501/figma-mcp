@@ -380,14 +380,17 @@ function getExecHelpers() {
         _execLoadedFonts[key] = true;
       }
     },
-    screen: async function(name) {
+    screen: async function(name, opts) {
+      opts = opts || {};
       var f = figma.createFrame();
       f.name = name || "Screen";
-      f.resize(393, 852);
-      f.x = 0; f.y = 0;
+      f.resize(opts.width || 393, opts.height || 852);
+      // opts.x가 명시적으로 주어지면 그 값 사용, 없으면 자동 계산
+      var sx = (typeof opts.x === 'number') ? opts.x : _execF.nextScreenPos().screenX;
+      f.x = sx; f.y = opts.y || 0;
       f.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
       figma.currentPage.appendChild(f);
-      return { id: f.id, name: f.name, x: f.x, y: f.y, width: f.width, height: f.height };
+      return { id: f.id, name: f.name, x: f.x, y: f.y, width: f.width, height: f.height, descX: f.x + 433 };
     },
     frame: async function(name, w, h, opts) {
       opts = opts || {};
@@ -396,14 +399,35 @@ function getExecHelpers() {
       f.resize(w || 100, h || 100);
       f.x = opts.x || 0; f.y = opts.y || 0;
       if (opts.fillColor) f.fills = [{ type: "SOLID", color: _execF.color(opts.fillColor) }];
+      else if (opts.transparent) f.fills = [];
+      if (opts.cornerRadius !== undefined) f.cornerRadius = opts.cornerRadius;
+      if (opts.strokeColor) {
+        f.strokes = [{ type: "SOLID", color: _execF.color(opts.strokeColor) }];
+        f.strokeWeight = opts.strokeWeight || 1;
+        f.strokeAlign = opts.strokeAlign || "INSIDE";
+      }
+      if (opts.shadow) {
+        var sh = opts.shadow;
+        f.effects = [{ type: "DROP_SHADOW", color: { r:0, g:0, b:0, a: sh.opacity !== undefined ? sh.opacity : 0.1 }, offset: { x: sh.x || 0, y: sh.y || 2 }, radius: sh.blur || 8, spread: sh.spread || 0, visible: true, blendMode: "NORMAL" }];
+      }
       var p = opts.parentId ? await figma.getNodeByIdAsync(opts.parentId) : figma.currentPage;
       if (p && typeof p.appendChild === "function") p.appendChild(f);
       return { id: f.id, name: f.name, x: f.x, y: f.y, width: f.width, height: f.height };
     },
+    // 한국어 포함 여부 감지 → Noto Sans / Roboto 자동 선택 (sync)
+    autoFont: function(text, preferStyle) {
+      var hasKorean = /[\uAC00-\uD7AF\u3130-\u318F]/.test(text || '');
+      return {
+        family: hasKorean ? 'Noto Sans' : 'Roboto',
+        style: preferStyle || (hasKorean ? 'Bold' : 'Regular')
+      };
+    },
     text: async function(content, opts) {
       opts = opts || {};
-      var family = opts.fontFamily || "Roboto";
-      var style = opts.fontStyle || "Regular";
+      // fontFamily 미지정 시 한국어 자동 감지
+      var auto = _execF.autoFont(content, opts.fontStyle);
+      var family = opts.fontFamily || auto.family;
+      var style = opts.fontStyle || auto.style;
       await _execF.loadFont(family, style);
       var t = figma.createText();
       t.fontName = { family: family, style: style };
@@ -441,6 +465,30 @@ function getExecHelpers() {
     findById: async function(id) {
       return figma.getNodeByIdAsync(id);
     },
+    // 한국어 자동감지 + 폰트로드 + characters 한번에 처리 (sync autoFont → async load → set)
+    setChars: async function(node, content, style) {
+      var text = content != null ? String(content) : '';
+      var af = _execF.autoFont(text, style);
+      await _execF.loadFont(af.family, af.style);
+      node.fontName = af;
+      node.characters = text;
+      return node;
+    },
+    // 페이지 레벨 어노테이션 뱃지 생성 (execute_plugin_code 내 인라인 정의 불필요)
+    mkBadge: async function(num, bx, by) {
+      await _execF.loadFont("Roboto", "Bold");
+      var f = figma.createFrame();
+      f.name = '뱃지-' + num; f.resize(44, 29); f.cornerRadius = 15;
+      f.fills = [{ type: "SOLID", color: _execF.color('#BF0F0F') }];
+      f.x = Math.round(bx || 0); f.y = Math.round(by || 0);
+      figma.currentPage.appendChild(f);
+      var t = figma.createText();
+      t.fontName = { family: "Roboto", style: "Bold" }; t.fontSize = 14;
+      t.characters = String(num); t.fills = [{ type: "SOLID", color: { r:1, g:1, b:1 } }];
+      t.textAlignHorizontal = "CENTER"; t.textAutoResize = "NONE";
+      t.resize(44, 22); t.x = 0; t.y = 4; f.appendChild(t);
+      return { id: f.id, x: f.x, y: f.y };
+    },
     // ── UI Component Helpers ─────────────────────────────────────────────
     statusBar: async function(parentId, opts) {
       opts = opts || {};
@@ -474,21 +522,14 @@ function getExecHelpers() {
       f.cornerRadius = 8;
       var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
       if (p) p.appendChild(f);
-      await _execF.loadFont("Roboto", "Regular");
       var lbl = figma.createText();
-      lbl.fontName = { family: "Roboto", style: "Regular" };
-      lbl.fontSize = 12;
-      lbl.characters = label;
-      lbl.fills = [{ type: "SOLID", color: _execF.color("#757575") }];
+      lbl.fontSize = 12; lbl.fills = [{ type: "SOLID", color: _execF.color("#757575") }];
       lbl.x = 12; lbl.y = 9;
-      f.appendChild(lbl);
+      await _execF.setChars(lbl, label, "Regular"); f.appendChild(lbl);
       var ph = figma.createText();
-      ph.fontName = { family: "Roboto", style: "Regular" };
-      ph.fontSize = 15;
-      ph.characters = placeholder;
-      ph.fills = [{ type: "SOLID", color: _execF.color("#BDBDBD") }];
+      ph.fontSize = 15; ph.fills = [{ type: "SOLID", color: _execF.color("#BDBDBD") }];
       ph.x = 12; ph.y = 28;
-      f.appendChild(ph);
+      await _execF.setChars(ph, placeholder || '', "Regular"); f.appendChild(ph);
       return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
     },
     primaryButton: async function(label, parentId, opts) {
@@ -502,18 +543,11 @@ function getExecHelpers() {
       f.cornerRadius = 12;
       var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
       if (p) p.appendChild(f);
-      await _execF.loadFont("Roboto", "Bold");
       var t = figma.createText();
-      t.fontName = { family: "Roboto", style: "Bold" };
-      t.fontSize = 16;
-      t.characters = label;
-      t.fills = [{ type: "SOLID", color: _execF.color(opts.disabled ? "#BDBDBD" : "#FFFFFF") }];
-      t.textAlignHorizontal = "CENTER";
-      t.lineHeight = { value: 52, unit: "PIXELS" };
-      t.textAutoResize = "NONE";
-      t.resize(opts.width || 361, 52);
-      t.x = 0; t.y = 0;
-      f.appendChild(t);
+      t.fontSize = 16; t.fills = [{ type: "SOLID", color: _execF.color(opts.disabled ? "#BDBDBD" : "#FFFFFF") }];
+      t.textAlignHorizontal = "CENTER"; t.lineHeight = { value: 52, unit: "PIXELS" };
+      t.textAutoResize = "NONE"; t.resize(opts.width || 361, 52); t.x = 0; t.y = 0;
+      await _execF.setChars(t, label, "Bold"); f.appendChild(t);
       return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
     },
     outlineButton: async function(label, parentId, opts) {
@@ -529,64 +563,91 @@ function getExecHelpers() {
       f.cornerRadius = 12;
       var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
       if (p) p.appendChild(f);
-      await _execF.loadFont("Roboto", "Regular");
       var t = figma.createText();
-      t.fontName = { family: "Roboto", style: "Regular" };
-      t.fontSize = 15;
-      t.characters = label;
-      t.fills = [{ type: "SOLID", color: _execF.color(opts.textColor || "#212121") }];
-      t.textAlignHorizontal = "CENTER";
-      t.lineHeight = { value: 52, unit: "PIXELS" };
-      t.textAutoResize = "NONE";
-      t.resize(opts.width || 361, 52);
-      t.x = 0; t.y = 0;
-      f.appendChild(t);
+      t.fontSize = 15; t.fills = [{ type: "SOLID", color: _execF.color(opts.textColor || "#212121") }];
+      t.textAlignHorizontal = "CENTER"; t.lineHeight = { value: 52, unit: "PIXELS" };
+      t.textAutoResize = "NONE"; t.resize(opts.width || 361, 52); t.x = 0; t.y = 0;
+      await _execF.setChars(t, label, "Regular"); f.appendChild(t);
       return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
     },
     listItem: async function(text, parentId, opts) {
       opts = opts || {};
+      var hasSubText = !!opts.subText;
+      var fw = opts.width || 393;
+      var itemH = hasSubText ? 68 : (opts.height || 56);
       var f = figma.createFrame();
       f.name = opts.name || text;
-      f.resize(opts.width || 393, 56);
+      f.resize(fw, itemH);
       f.x = opts.x || 0; f.y = opts.y || 0;
       f.fills = [{ type: "SOLID", color: _execF.color(opts.bgColor || "#FFFFFF") }];
       var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
       if (p) p.appendChild(f);
-      await _execF.loadFont("Roboto", "Regular");
       var t = figma.createText();
-      t.fontName = { family: "Roboto", style: "Regular" };
-      t.fontSize = 15;
+      t.fontSize = opts.fontSize || 15;
       t.lineHeight = { value: 22, unit: "PIXELS" };
-      t.characters = text;
-      t.fills = [{ type: "SOLID", color: _execF.color("#212121") }];
-      t.x = 16; t.y = 17;
+      await _execF.setChars(t, text, opts.fontStyle || "Regular");
+      t.fills = [{ type: "SOLID", color: _execF.color(opts.textColor || "#212121") }];
+      t.x = 16; t.y = hasSubText ? 12 : Math.floor((itemH - 22) / 2);
       f.appendChild(t);
+      if (hasSubText) {
+        var st = figma.createText();
+        st.fontSize = 13; st.lineHeight = { value: 18, unit: "PIXELS" };
+        await _execF.setChars(st, opts.subText, "Regular");
+        st.fills = [{ type: "SOLID", color: _execF.color("#757575") }];
+        st.x = 16; st.y = 36; f.appendChild(st);
+      }
+      if (opts.value !== undefined) {
+        var vt = figma.createText();
+        vt.fontSize = opts.valueFontSize || 15;
+        await _execF.setChars(vt, String(opts.value), opts.valueStyle || "Regular");
+        vt.fills = [{ type: "SOLID", color: _execF.color(opts.valueColor || "#757575") }];
+        vt.textAlignHorizontal = "RIGHT"; vt.textAutoResize = "NONE";
+        vt.resize(120, 22); vt.x = fw - 136; vt.y = hasSubText ? 12 : Math.floor((itemH - 22) / 2);
+        f.appendChild(vt);
+      }
+      if (opts.rightText !== undefined) {
+        var rt = figma.createText();
+        rt.fontSize = 13;
+        await _execF.setChars(rt, String(opts.rightText), "Regular");
+        rt.fills = [{ type: "SOLID", color: _execF.color(opts.rightColor || "#2196F3") }];
+        rt.textAutoResize = "WIDTH_AND_HEIGHT";
+        rt.x = fw - 80; rt.y = hasSubText ? 12 : Math.floor((itemH - 18) / 2);
+        f.appendChild(rt);
+      }
       var div = figma.createRectangle();
-      div.name = "Divider";
-      div.resize(opts.width || 393, 1);
-      div.x = 0; div.y = 55;
+      div.name = "Divider"; div.resize(fw, 1);
+      div.x = 0; div.y = itemH - 1;
       div.fills = [{ type: "SOLID", color: _execF.color("#E0E0E0") }];
       f.appendChild(div);
       return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
     },
     sectionHeader: async function(text, parentId, opts) {
       opts = opts || {};
+      var fh = opts.height || 44;
+      var fw = opts.width || 393;
       var f = figma.createFrame();
       f.name = text;
-      f.resize(opts.width || 393, 32);
+      f.resize(fw, fh);
       f.x = opts.x || 0; f.y = opts.y || 0;
-      f.fills = [{ type: "SOLID", color: _execF.color("#F5F5F5") }];
+      f.fills = [{ type: "SOLID", color: _execF.color(opts.bgColor || "#F5F5F5") }];
       var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
       if (p) p.appendChild(f);
-      await _execF.loadFont("Roboto", "Bold");
       var t = figma.createText();
-      t.fontName = { family: "Roboto", style: "Bold" };
-      t.fontSize = 13;
-      t.lineHeight = { value: 18, unit: "PIXELS" };
-      t.characters = text;
-      t.fills = [{ type: "SOLID", color: _execF.color("#757575") }];
-      t.x = 16; t.y = 7;
+      t.fontSize = opts.fontSize || 14;
+      t.lineHeight = { value: 20, unit: "PIXELS" };
+      await _execF.setChars(t, text, "Bold");
+      t.fills = [{ type: "SOLID", color: _execF.color(opts.color || "#757575") }];
+      t.x = 16; t.y = Math.floor((fh - 20) / 2);
       f.appendChild(t);
+      if (opts.rightText) {
+        var rt = figma.createText();
+        rt.fontSize = 13;
+        await _execF.setChars(rt, opts.rightText, "Regular");
+        rt.fills = [{ type: "SOLID", color: _execF.color(opts.rightColor || "#2196F3") }];
+        rt.textAutoResize = "WIDTH_AND_HEIGHT";
+        rt.x = fw - 80; rt.y = Math.floor((fh - 18) / 2);
+        f.appendChild(rt);
+      }
       return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
     },
     tabBar: async function(tabs, parentId, opts) {
@@ -594,28 +655,33 @@ function getExecHelpers() {
       var f = figma.createFrame();
       f.name = "Tab Bar";
       f.resize(393, 56);
-      f.x = 0; f.y = opts.y !== undefined ? opts.y : 796;
+      f.x = opts.x || 0; f.y = opts.y !== undefined ? opts.y : 796;
       f.fills = [{ type: "SOLID", color: _execF.color("#FFFFFF") }];
-      f.strokes = [{ type: "SOLID", color: _execF.color("#E0E0E0") }];
-      f.strokeWeight = 1;
       var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
       if (p) p.appendChild(f);
-      await _execF.loadFont("Roboto", "Medium");
+      // Top border via rect (avoids frame stroke clipping)
+      var brd = figma.createRectangle();
+      brd.name = "Tab Border"; brd.resize(393, 1); brd.x = 0; brd.y = 0;
+      brd.fills = [{ type: "SOLID", color: _execF.color("#E0E0E0") }];
+      f.appendChild(brd);
       var tabW = Math.floor(393 / tabs.length);
       for (var i = 0; i < tabs.length; i++) {
         var isActive = opts.activeIndex === i;
         var label = typeof tabs[i] === "string" ? tabs[i] : tabs[i].label;
         var t = figma.createText();
-        t.fontName = { family: "Roboto", style: "Medium" };
-        t.fontSize = 10;
-        t.lineHeight = { value: 14, unit: "PIXELS" };
-        t.characters = label;
+        t.fontSize = 10; t.lineHeight = { value: 14, unit: "PIXELS" };
+        await _execF.setChars(t, label, "Medium");
         t.fills = [{ type: "SOLID", color: _execF.color(isActive ? "#2196F3" : "#757575") }];
-        t.textAlignHorizontal = "CENTER";
-        t.textAutoResize = "HEIGHT";
-        t.resize(tabW, 14);
-        t.x = i * tabW; t.y = 21;
+        t.textAlignHorizontal = "CENTER"; t.textAutoResize = "HEIGHT";
+        t.resize(tabW, 14); t.x = i * tabW; t.y = 22;
         f.appendChild(t);
+        if (isActive) {
+          var ind = figma.createRectangle();
+          ind.name = "Active"; ind.resize(tabW, 2);
+          ind.x = i * tabW; ind.y = 54;
+          ind.fills = [{ type: "SOLID", color: _execF.color("#2196F3") }];
+          f.appendChild(ind);
+        }
       }
       return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
     },
@@ -665,6 +731,27 @@ function getExecHelpers() {
     // 박제 스펙: 585px 고정폭, Meta(흰색 4행×65px) + Header(#F2F2F2 59px) + Body(#F2F2F2 가변)
     description: async function(screenName, meta, sections, opts) {
       opts = opts || {};
+      // ── 방어적 시그니처 정규화 ──────────────────────────────────────────
+      // 구(old) 호출 패턴: F.description(name, x, y, [id,path,desc,dev], sections)
+      // 신(new) 호출 패턴: F.description(name, {id,path,desc,devType}, sections, {x,y})
+      if (typeof meta === 'number') {
+        // meta 자리에 숫자(x좌표)가 들어온 경우 → 구 패턴으로 재매핑
+        var _x = meta, _y = sections;
+        var _arr = opts; // 4-element array [id,path,desc,devType]
+        var _secs = arguments[4] || [];
+        meta = Array.isArray(_arr)
+          ? { id:_arr[0], path:_arr[1], desc:_arr[2], devType:_arr[3] }
+          : (_arr || {});
+        sections = _secs;
+        opts = { x: _x, y: _y };
+      } else if (Array.isArray(meta)) {
+        // meta 자리에 배열이 직접 들어온 경우
+        opts = sections || {};
+        sections = Array.isArray(opts) ? opts : (arguments[3] || []);
+        meta = { id:meta[0], path:meta[1], desc:meta[2], devType:meta[3] };
+        if (!Array.isArray(sections)) sections = [];
+      }
+      // ────────────────────────────────────────────────────────────────────
       await figma.loadFontAsync({ family: "Noto Sans", style: "Bold" });
       await figma.loadFontAsync({ family: "Roboto", style: "Bold" });
       await figma.loadFontAsync({ family: "Roboto", style: "Regular" });
@@ -791,6 +878,336 @@ function getExecHelpers() {
       main.resize(585, 280+59+cy);
       return { id:main.id, x:main.x, y:main.y, width:main.width, height:main.height };
     },
+    // ── New UI Component Helpers ──────────────────────────────────────────
+    ellipse: async function(name, w, h, opts) {
+      opts = opts || {};
+      var e = figma.createEllipse();
+      e.name = name || "Ellipse";
+      e.resize(w || 40, h || 40);
+      e.x = opts.x || 0; e.y = opts.y || 0;
+      if (opts.fillColor) e.fills = [{ type: "SOLID", color: _execF.color(opts.fillColor) }];
+      else if (opts.transparent) e.fills = [];
+      else e.fills = [{ type: "SOLID", color: { r:0.784, g:0.784, b:0.784 } }];
+      if (opts.strokeColor) {
+        e.strokes = [{ type: "SOLID", color: _execF.color(opts.strokeColor) }];
+        e.strokeWeight = opts.strokeWeight || 1;
+      }
+      var p = opts.parentId ? await figma.getNodeByIdAsync(opts.parentId) : figma.currentPage;
+      if (p && typeof p.appendChild === "function") p.appendChild(e);
+      return { id: e.id, name: e.name, x: e.x, y: e.y, width: e.width, height: e.height };
+    },
+    appHeader: async function(title, parentId, opts) {
+      opts = opts || {};
+      var fw = opts.width || 393;
+      var fh = opts.height || 56;
+      var f = figma.createFrame();
+      f.name = "Header";
+      f.resize(fw, fh);
+      f.x = opts.x || 0; f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: _execF.color(opts.bgColor || "#FFFFFF") }];
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      var t = figma.createText();
+      t.fontSize = opts.titleFontSize || 17;
+      t.lineHeight = { value: 24, unit: "PIXELS" };
+      await _execF.setChars(t, title, "Bold");
+      t.fills = [{ type: "SOLID", color: _execF.color(opts.titleColor || "#212121") }];
+      t.textAlignHorizontal = "CENTER"; t.textAutoResize = "NONE";
+      t.resize(fw, 24); t.x = 0; t.y = Math.floor((fh - 24) / 2);
+      f.appendChild(t);
+      // Bottom divider
+      var div = figma.createRectangle();
+      div.name = "Divider"; div.resize(fw, 1); div.x = 0; div.y = fh - 1;
+      div.fills = [{ type: "SOLID", color: _execF.color("#E0E0E0") }];
+      f.appendChild(div);
+      if (opts.hasBack) {
+        var back = figma.createText();
+        back.fontSize = 14;
+        await _execF.setChars(back, "< 뒤로", "Regular");
+        back.fills = [{ type: "SOLID", color: _execF.color("#2196F3") }];
+        back.x = 16; back.y = Math.floor((fh - 20) / 2);
+        f.appendChild(back);
+      }
+      if (opts.hasMenu) {
+        for (var mi = 0; mi < 3; mi++) {
+          var bar = figma.createRectangle();
+          bar.name = "Bar" + mi; bar.resize(20, 2);
+          bar.x = 16; bar.y = Math.floor((fh - 16) / 2) + mi * 7;
+          bar.fills = [{ type: "SOLID", color: _execF.color("#212121") }];
+          f.appendChild(bar);
+        }
+      }
+      if (opts.hasBell) {
+        var bell = figma.createEllipse();
+        bell.name = "Bell Icon"; bell.resize(24, 24);
+        bell.x = fw - 40; bell.y = Math.floor((fh - 24) / 2);
+        bell.fills = [{ type: "SOLID", color: { r:0.784, g:0.784, b:0.784 } }];
+        f.appendChild(bell);
+      }
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    inlineButtons: async function(labels, parentId, opts) {
+      opts = opts || {};
+      var n = labels.length;
+      var fw = opts.width || 393;
+      var padding = opts.padding !== undefined ? opts.padding : 16;
+      var gap = opts.gap || 8;
+      var btnH = opts.height || 44;
+      var totalW = fw - padding * 2;
+      var btnW = Math.floor((totalW - gap * (n - 1)) / n);
+      var f = figma.createFrame();
+      f.name = opts.name || "Inline Buttons";
+      f.resize(fw, btnH);
+      f.x = opts.x || 0; f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: { r:1, g:1, b:1 } }];
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Medium");
+      for (var i = 0; i < n; i++) {
+        var label = labels[i];
+        var isActive = opts.activeIndex === i;
+        var btnFill = isActive ? (opts.activeColor || "#2196F3") : (opts.btnColor || "#F5F5F5");
+        var textFill = isActive ? "#FFFFFF" : (opts.textColor || "#212121");
+        var btn = figma.createFrame();
+        btn.name = "Btn-" + label;
+        btn.resize(btnW, btnH);
+        btn.x = padding + i * (btnW + gap); btn.y = 0;
+        btn.fills = [{ type: "SOLID", color: _execF.color(btnFill) }];
+        btn.cornerRadius = opts.cornerRadius || 8;
+        if (!isActive) {
+          btn.strokes = [{ type: "SOLID", color: _execF.color(opts.strokeColor || "#E0E0E0") }];
+          btn.strokeWeight = 1;
+        }
+        f.appendChild(btn);
+        var bt = figma.createText();
+        bt.fontName = { family: "Roboto", style: "Medium" };
+        bt.fontSize = opts.fontSize || 14;
+        bt.characters = label;
+        bt.fills = [{ type: "SOLID", color: _execF.color(textFill) }];
+        bt.textAlignHorizontal = "CENTER";
+        bt.lineHeight = { value: btnH, unit: "PIXELS" };
+        bt.textAutoResize = "NONE"; bt.resize(btnW, btnH); bt.x = 0; bt.y = 0;
+        btn.appendChild(bt);
+      }
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    select: async function(label, value, parentId, opts) {
+      opts = opts || {};
+      var fw = opts.width || 361;
+      var fh = opts.height || 56;
+      var f = figma.createFrame();
+      f.name = label + " 선택";
+      f.resize(fw, fh);
+      f.x = opts.x !== undefined ? opts.x : 16;
+      f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: _execF.color("#FFFFFF") }];
+      f.strokes = [{ type: "SOLID", color: _execF.color("#E0E0E0") }];
+      f.strokeWeight = 1; f.cornerRadius = 8;
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Regular");
+      var lbl = figma.createText();
+      lbl.fontName = { family: "Roboto", style: "Regular" }; lbl.fontSize = 12;
+      lbl.characters = label;
+      lbl.fills = [{ type: "SOLID", color: _execF.color("#757575") }];
+      lbl.x = 12; lbl.y = 9; f.appendChild(lbl);
+      var val = figma.createText();
+      val.fontName = { family: "Roboto", style: "Regular" }; val.fontSize = 15;
+      val.characters = value || "선택하세요";
+      val.fills = [{ type: "SOLID", color: _execF.color(value ? "#212121" : "#BDBDBD") }];
+      val.x = 12; val.y = 28; f.appendChild(val);
+      var chev = figma.createText();
+      chev.fontName = { family: "Roboto", style: "Regular" }; chev.fontSize = 16;
+      chev.characters = "▾";
+      chev.fills = [{ type: "SOLID", color: _execF.color("#757575") }];
+      chev.x = fw - 28; chev.y = Math.floor((fh - 22) / 2); f.appendChild(chev);
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    summaryCard: async function(rows, parentId, opts) {
+      opts = opts || {};
+      var fw = opts.width || 361;
+      var rowH = opts.rowHeight || 40;
+      var totalH = rows.length * rowH + 16;
+      var f = figma.createFrame();
+      f.name = opts.name || "Summary Card";
+      f.resize(fw, totalH);
+      f.x = opts.x !== undefined ? opts.x : 16;
+      f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: _execF.color(opts.bgColor || "#F5F5F5") }];
+      f.cornerRadius = opts.cornerRadius || 8;
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Regular");
+      await _execF.loadFont("Roboto", "Bold");
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        var ry = 8 + i * rowH;
+        var labelT = figma.createText();
+        labelT.fontName = { family: "Roboto", style: "Regular" }; labelT.fontSize = 14;
+        labelT.characters = row.label;
+        labelT.fills = [{ type: "SOLID", color: _execF.color("#757575") }];
+        labelT.x = 16; labelT.y = ry + Math.floor((rowH - 20) / 2); f.appendChild(labelT);
+        var valueT = figma.createText();
+        valueT.fontName = { family: "Roboto", style: row.bold ? "Bold" : "Regular" }; valueT.fontSize = 14;
+        valueT.characters = String(row.value);
+        valueT.fills = [{ type: "SOLID", color: _execF.color(row.color || "#212121") }];
+        valueT.textAlignHorizontal = "RIGHT"; valueT.textAutoResize = "NONE";
+        valueT.resize(fw - 32, 20); valueT.x = 16; valueT.y = ry + Math.floor((rowH - 20) / 2);
+        f.appendChild(valueT);
+        if (i < rows.length - 1) {
+          var divR = figma.createRectangle();
+          divR.name = "Row Divider"; divR.resize(fw - 32, 1);
+          divR.x = 16; divR.y = ry + rowH - 1;
+          divR.fills = [{ type: "SOLID", color: _execF.color("#E0E0E0") }]; f.appendChild(divR);
+        }
+      }
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    passwordDots: async function(total, filled, parentId, opts) {
+      opts = opts || {};
+      var dotSize = opts.dotSize || 16;
+      var gap = opts.gap || 20;
+      var fw = opts.width || 393;
+      var fh = opts.height || 56;
+      var f = figma.createFrame();
+      f.name = "Password Dots";
+      f.resize(fw, fh);
+      f.x = opts.x || 0; f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: { r:1, g:1, b:1 } }];
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      var totalW = total * dotSize + (total - 1) * gap;
+      var startX = Math.floor((fw - totalW) / 2);
+      var dotY = Math.floor((fh - dotSize) / 2);
+      for (var i = 0; i < total; i++) {
+        var dot = figma.createEllipse();
+        dot.name = "Dot-" + (i + 1); dot.resize(dotSize, dotSize);
+        dot.x = startX + i * (dotSize + gap); dot.y = dotY;
+        dot.fills = [{ type: "SOLID", color: _execF.color(i < filled ? "#212121" : "#E0E0E0") }];
+        f.appendChild(dot);
+      }
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    numpad: async function(parentId, opts) {
+      opts = opts || {};
+      var keys = opts.keys || ["1","2","3","4","5","6","7","8","9","*","0","#"];
+      var cols = opts.cols || 3;
+      var btnW = opts.btnWidth || 100;
+      var btnH = opts.btnHeight || 72;
+      var gap = opts.gap || 16;
+      var rows = Math.ceil(keys.length / cols);
+      var contentW = cols * btnW + (cols - 1) * gap;
+      var contentH = rows * btnH + (rows - 1) * gap;
+      var padX = opts.padX !== undefined ? opts.padX : Math.floor((393 - contentW) / 2);
+      var padY = opts.padY || 16;
+      var fw = opts.width || 393;
+      var fh = contentH + padY * 2;
+      var f = figma.createFrame();
+      f.name = "Numpad";
+      f.resize(fw, fh);
+      f.x = opts.x || 0; f.y = opts.y || 0;
+      f.fills = [{ type: "SOLID", color: { r:1, g:1, b:1 } }];
+      var p = parentId ? await figma.getNodeByIdAsync(parentId) : figma.currentPage;
+      if (p) p.appendChild(f);
+      await _execF.loadFont("Roboto", "Medium");
+      for (var i = 0; i < keys.length; i++) {
+        var col = i % cols;
+        var row = Math.floor(i / cols);
+        var bx = padX + col * (btnW + gap);
+        var by = padY + row * (btnH + gap);
+        var btn = figma.createFrame();
+        btn.name = "Key-" + keys[i];
+        btn.resize(btnW, btnH); btn.x = bx; btn.y = by;
+        btn.fills = [{ type: "SOLID", color: _execF.color(opts.keyBg || "#F5F5F5") }];
+        btn.cornerRadius = opts.cornerRadius || 8;
+        f.appendChild(btn);
+        if (keys[i] !== "" && keys[i] !== " ") {
+          var kt = figma.createText();
+          kt.fontName = { family: "Roboto", style: "Medium" };
+          kt.fontSize = opts.keyFontSize || 24;
+          kt.characters = keys[i];
+          kt.fills = [{ type: "SOLID", color: _execF.color(opts.keyColor || "#212121") }];
+          kt.textAlignHorizontal = "CENTER";
+          kt.lineHeight = { value: btnH, unit: "PIXELS" };
+          kt.textAutoResize = "NONE"; kt.resize(btnW, btnH); kt.x = 0; kt.y = 0;
+          btn.appendChild(kt);
+        }
+      }
+      return { id: f.id, x: f.x, y: f.y, width: f.width, height: f.height };
+    },
+    // ── Layout Utilities ──────────────────────────────────────────────────
+    // 다음 화면의 x 좌표를 자동 계산 (기존 393px 프레임 기준)
+    // 반환: { screenX, descX }  descX = screenX + 433 (40px gap)
+    nextScreenPos: function() {
+      var INTERVAL = 1060; // 393(screen) + 40(gap) + 585(desc) + 42(gap)
+      var page = figma.currentPage;
+      var maxX = -Infinity;
+      var found = false;
+      for (var i = 0; i < page.children.length; i++) {
+        var n = page.children[i];
+        if (n.type === "FRAME" && Math.round(n.width) === 393) {
+          if (n.x > maxX) { maxX = n.x; found = true; }
+        }
+      }
+      var screenX = found ? maxX + INTERVAL : 0;
+      return { screenX: screenX, descX: screenX + 433 };
+    },
+    // 뱃지를 대상 요소의 왼쪽 1/4 겹침 + 수직 중앙에 자동 배치
+    // badgeId: 페이지 레벨 뱃지 노드 ID, elementId: 대상 요소 ID
+    placeBadge: async function(badgeId, elementId) {
+      var badge = await figma.getNodeByIdAsync(badgeId);
+      var el = await figma.getNodeByIdAsync(elementId);
+      if (!badge || !el) return { error: "node not found" };
+      var absX = el.absoluteTransform[0][2];
+      var absY = el.absoluteTransform[1][2];
+      badge.x = absX - 33; // 44 * 3/4 = 33 → 1/4(11px) 겹침
+      badge.y = absY + Math.floor((el.height - 29) / 2);
+      return { id: badge.id, x: badge.x, y: badge.y };
+    },
+    // 현재 페이지의 모든 화면 프레임(w=393)과 Description(w=585)을
+    // x 순서 기준으로 1060px 간격 재정렬, y=0 고정
+    alignScreens: function() {
+      var INTERVAL = 1060;
+      var page = figma.currentPage;
+      var screens = [], descs = [], badges = [];
+      for (var i = 0; i < page.children.length; i++) {
+        var n = page.children[i];
+        if (n.type !== "FRAME" && n.type !== "INSTANCE" && n.type !== "COMPONENT") continue;
+        if (n.type === "FRAME" && Math.round(n.width) === 393) screens.push(n);
+        else if (n.type === "FRAME" && Math.round(n.width) === 585) descs.push(n);
+        else if (n.name && n.name.indexOf("뱃지") >= 0) badges.push(n);
+      }
+      screens.sort(function(a, b) { return a.x - b.x; });
+      var moved = 0;
+      for (var si = 0; si < screens.length; si++) {
+        var targetX = si * INTERVAL;
+        var oldX = screens[si].x;
+        var dx = targetX - oldX;
+        screens[si].y = 0;
+        if (Math.abs(dx) < 1) continue;
+        screens[si].x = targetX;
+        moved++;
+        // 매칭 desc: 기존 desc.x ≈ oldX + 433 인 것
+        var oldDescX = oldX + 433;
+        for (var di = 0; di < descs.length; di++) {
+          if (Math.abs(descs[di].x - oldDescX) < 100) {
+            descs[di].x = targetX + 433;
+            descs[di].y = 0;
+            descs.splice(di, 1);
+            break;
+          }
+        }
+        // 매칭 badge: 기존 화면 x 범위 내(±50) 에 있는 것
+        for (var bi = badges.length - 1; bi >= 0; bi--) {
+          if (badges[bi].x >= oldX - 50 && badges[bi].x <= oldX + 460) {
+            badges[bi].x += dx;
+            badges.splice(bi, 1);
+          }
+        }
+      }
+      return { screensFound: screens.length, moved: moved };
+    },
+    // ── End Layout Utilities ──────────────────────────────────────────────
     // ── End UI Component Helpers ─────────────────────────────────────────
     recolor: function(oldHex, newHex, root) {
       var oldC = _execF.color(oldHex);
@@ -837,6 +1254,8 @@ async function executePluginCode(params) {
   }
 
   var helpers = getExecHelpers();
+  // Pre-load Inter Regular to prevent "unloaded font" errors on new text nodes
+  try { await figma.loadFontAsync({ family: "Inter", style: "Regular" }); } catch(e) {}
   var AsyncFn = Object.getPrototypeOf(async function() {}).constructor;
 
   var fn;
